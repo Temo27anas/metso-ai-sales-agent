@@ -74,6 +74,10 @@ FSR IDs. Mention the currency and any low-confidence notes.
 - If the question is about a specific job (e.g. seal replacement), use only \
 the reports whose task_summary matches that job, name them, and say if \
 none of them has a cost. Do not use other jobs' costs as that job's cost.
+- If the customer's country is known, pass it. Present country_rates as \
+local rate context from other equipment, not as this job's cost.
+- When a report has no total but has line_item_sum, you may use it as the \
+budget figure; say it is computed from that report's line items.
 - Never invent rates or convert currencies.
 
 Flotation questions:
