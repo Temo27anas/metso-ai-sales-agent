@@ -1,3 +1,5 @@
+import re
+
 from config import BROCHURES_DIR
 
 
@@ -32,17 +34,17 @@ report's word for it; do not check the date against the day of the week.
 """
 
 
-def list_brochures() -> dict[str, str]:
-    """Brochure name -> first non-empty description line."""
+def list_brochures(max_chars: int = 200) -> dict[str, str]:
+    """Brochure name -> opening text of the brochure (whitespace collapsed)."""
     products = {}
     for path in sorted(BROCHURES_DIR.glob("*.md")):
-        description = ""
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and not line.startswith("Source:"):
-                description = line
-                break
-        products[path.stem] = description
+        lines = [
+            line.strip() for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+            and not line.startswith(("#", "Source:"))
+            and not re.fullmatch(r"[\d\W]+", line.strip())  # page numbers, bullets
+        ]
+        products[path.stem] = re.sub(r"\s+", " ", " ".join(lines))[:max_chars]
     return products
 
 
@@ -53,7 +55,7 @@ You help a salesperson of a mining equipment company. Answer only from tool \
 results. Every number, spec, cost or percentile you state must come from a \
 tool result in this conversation.
 
-Products with a brochure (name: first line of the brochure):
+Products with a brochure (name: opening text of the brochure):
 {products}
 
 Product facts:
@@ -74,7 +76,12 @@ Flotation questions:
 - Call assess_flotation. Base the judgment on the computed percentiles.
 - Suggest levers from the computed best-vs-worst differences, and note they \
 are correlations.
-- If you link a lever to a product, call get_brochure and cite it.
+- After assess_flotation, check whether the top levers relate to equipment in \
+the product list (e.g. column level, air flow, mixing). If so, call \
+get_brochure for the best-matching product and suggest it, quoting the \
+brochure fact that connects it to the lever, with its citation.
+- If a lever has no matching product (e.g. reagent dosing), say it is an \
+operating change, not an equipment sale.
 
 When the data doesn't contain the answer (prices, competitors, products \
 without a brochure, equipment without service history), say so plainly.
