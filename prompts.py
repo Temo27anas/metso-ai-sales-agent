@@ -1,3 +1,6 @@
+from config import BROCHURES_DIR
+
+
 REPORT_EXTRACTION_PROMPT = """\
 You extract structured data from a single field service report written by a \
 mining-equipment service technician. Reports are messy and formats vary.
@@ -27,3 +30,57 @@ report's word for it; do not check the date against the day of the week.
   - "total_only": only a total amount is given.
   - "none": no amount is given (e.g. "invoice to follow", "as per agreement").
 """
+
+
+def list_brochures() -> dict[str, str]:
+    """Brochure name -> first non-empty description line."""
+    products = {}
+    for path in sorted(BROCHURES_DIR.glob("*.md")):
+        description = ""
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and not line.startswith("Source:"):
+                description = line
+                break
+        products[path.stem] = description
+    return products
+
+
+def build_system_prompt() -> str:
+    products = "\n".join(f"- {name}: {desc}" for name, desc in list_brochures().items())
+    return f"""\
+You help a salesperson of a mining equipment company. Answer only from tool \
+results. Every number, spec, cost or percentile you state must come from a \
+tool result in this conversation.
+
+Products with a brochure (name: first line of the brochure):
+{products}
+
+Product facts:
+- Call get_brochure first. Never state a spec that is not in the brochure text.
+- Cite as [product, page N], using the "## Page N" markers.
+
+Recommendations:
+- Pick a specific product, give the reason tied to what the customer said, \
+and quote the supporting brochure fact with its citation.
+- If key information is missing, ask one clarifying question instead.
+
+Cost estimates:
+- Call estimate_service_cost. Give a range, the number of reports and the \
+FSR IDs. Mention the currency and any low-confidence notes.
+- Never invent rates or convert currencies.
+
+Flotation questions:
+- Call assess_flotation. Base the judgment on the computed percentiles.
+- Suggest levers from the computed best-vs-worst differences, and note they \
+are correlations.
+- If you link a lever to a product, call get_brochure and cite it.
+
+When the data doesn't contain the answer (prices, competitors, products \
+without a brochure, equipment without service history), say so plainly.
+
+Be concise and use salesperson-friendly language.
+"""
+
+
+SYSTEM_PROMPT = build_system_prompt()
