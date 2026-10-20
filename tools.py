@@ -41,6 +41,8 @@ def estimate_service_cost(equipment: str) -> dict:
         "onsite_hours": _range(rows["onsite_hours"]),
         "travel_hours": _range(rows["travel_hours"]),
         "costs_by_currency": {},
+        "reports": _records(rows[["report_id", "task_summary", "onsite_hours", "travel_hours",
+                                  "total_cost", "currency", "cost_status", "weekend_or_overtime"]]),
         "notes": [],
     }
 
@@ -68,6 +70,11 @@ def estimate_service_cost(equipment: str) -> dict:
         if r["check_ok"] is False or r["check_ok"] == "False":
             result["notes"].append(f"{r['report_id']}: line items do not add up to the total.")
     return result
+
+
+def _records(df: pd.DataFrame) -> list[dict]:
+    """rows as dicts, with NaN replaced by None so the JSON is clean"""
+    return df.astype(object).where(df.notna(), None).to_dict("records")
 
 
 def _range(series: pd.Series) -> Optional[dict]:
@@ -128,46 +135,40 @@ def assess_flotation(silica_concentrate: Optional[float] = None,
 
 
 # == Tool registry for the OpenAI API ==
-TOOLS = [
+TOOLS = [  # Responses API format
     {
         "type": "function",
-        "function": {
-            "name": "get_brochure",
-            "description": "Full text of one product brochure, with '## Page N' markers.",
-            "parameters": {
-                "type": "object",
-                "properties": {"product": {"type": "string", "enum": list(list_brochures())}},
-                "required": ["product"],
-            },
+        "name": "get_brochure",
+        "description": "Full text of one product brochure, with '## Page N' markers.",
+        "parameters": {
+            "type": "object",
+            "properties": {"product": {"type": "string", "enum": list(list_brochures())}},
+            "required": ["product"],
         },
     },
     {
         "type": "function",
-        "function": {
-            "name": "estimate_service_cost",
-            "description": "Cost and hours from historical field service reports for one equipment type.",
-            "parameters": {
-                "type": "object",
-                "properties": {"equipment": {"type": "string", "enum": EQUIPMENT_NAMES}},
-                "required": ["equipment"],
-            },
+        "name": "estimate_service_cost",
+        "description": "Cost and hours from historical field service reports for one equipment type.",
+        "parameters": {
+            "type": "object",
+            "properties": {"equipment": {"type": "string", "enum": EQUIPMENT_NAMES}},
+            "required": ["equipment"],
         },
     },
     {
         "type": "function",
-        "function": {
-            "name": "assess_flotation",
-            "description": (
-                "Compare a customer's iron ore flotation concentrate grades against hourly plant "
-                "data (percentiles), and list process variables that differ most between the "
-                "plant's best and worst silica hours."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "silica_concentrate": {"type": "number", "description": "% silica in concentrate"},
-                    "iron_concentrate": {"type": "number", "description": "% iron in concentrate"},
-                },
+        "name": "assess_flotation",
+        "description": (
+            "Compare a customer's iron ore flotation concentrate grades against hourly data from a reference "
+            "iron ore flotation plant (percentiles; not the customer's own plant), and list process variables "
+            "that differ most between the plant's best and worst silica hours."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "silica_concentrate": {"type": "number", "description": "% silica in concentrate"},
+                "iron_concentrate": {"type": "number", "description": "% iron in concentrate"},
             },
         },
     },

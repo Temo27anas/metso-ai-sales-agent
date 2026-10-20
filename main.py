@@ -19,33 +19,35 @@ MAX_TOOL_ROUNDS = 10
 
 def answer(client: OpenAI, messages: list, debug: bool) -> str:
     """call the model, run requested tools, repeat until it gives a final answer"""
+    extra = {"reasoning": {"effort": REASONING_EFFORT}} if REASONING_EFFORT else {}
     for _ in range(MAX_TOOL_ROUNDS): # limit the number of tool calls to avoid infinite loops
-        extra = {"reasoning_effort": REASONING_EFFORT} if REASONING_EFFORT else {}
-        response = client.chat.completions.create(model=MODEL, messages=messages, tools=TOOLS, **extra)
-        message = response.choices[0].message
-        messages.append(message.model_dump(exclude_none=True))
+        response = client.responses.create(model=MODEL, input=messages, tools=TOOLS, **extra)
+        # keep every output item (reasoning, function calls, message) in the history
+        messages.extend(item.model_dump(exclude_none=True) for item in response.output)
 
-        if not message.tool_calls:
-            return message.content or ""
+        calls = [item for item in response.output if item.type == "function_call"]
+        if not calls:
+            return response.output_text
 
-        for call in message.tool_calls:
+        for call in calls:
             if debug:
-                print(f"[tool] {call.function.name}({call.function.arguments})", file=sys.stderr)
+                print(f"[tool] {call.name}({call.arguments})", file=sys.stderr)
             messages.append({
-                "role": "tool",
-                "tool_call_id": call.id,
-                "content": run_tool(call.function.name, call.function.arguments),
+                "type": "function_call_output",
+                "call_id": call.call_id,
+                "output": run_tool(call.name, call.arguments),
             })
     return "Sorry, I couldn't finish that answer (too many tool calls)."
 
 
 def ask(client: OpenAI, messages: list, question: str, debug: bool) -> str:
     """ask a question, run tools if needed, and return the answer"""
+    start = len(messages)
     messages.append({"role": "user", "content": question})
     try:
         return answer(client, messages, debug) # run the model and tools until it gives a final answer
     except OpenAIError as e:
-        messages.pop()  # drop the unanswered question so history stays valid
+        del messages[start:]  # drop the unanswered turn so history stays valid
         return f"[API error] {e}"
 
 
