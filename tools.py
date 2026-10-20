@@ -24,13 +24,21 @@ def get_brochure(product: str) -> dict:
 
 
 # ==  Service costs ==
-def estimate_service_cost(equipment: str) -> dict:
-    """return cost and hours from historical field service reports for one equipment type"""
+def estimate_service_cost(equipment: str, country: Optional[str] = None) -> dict:
+    """return cost and hours from historical field service reports for one equipment type,
+    plus labour/travel rates seen in `country` (any equipment) if given"""
     df = pd.read_csv(REPORTS_CSV)
+    # labour + travel + parts, computed here so the LLM never does arithmetic
+    df["line_item_sum"] = (df["onsite_hours"] * df["labour_rate"]
+                           + df["travel_hours"] * df["travel_rate"]
+                           + df["parts_cost"].fillna(0)).round(2)
     rows = df[df["equipment"] == equipment] # filter to the requested equipment
     if rows.empty:
-        return {"equipment": equipment, "reports_found": 0,
-                "note": "No service history for this equipment."} # no data for this equipment
+        result = {"equipment": equipment, "reports_found": 0,
+                  "note": "No service history for this equipment."} # no data for this equipment
+        if country:
+            result["country_rates"] = _country_rates(df, country)
+        return result
 
     costed = rows[rows["total_cost"].notna()]
     result = {
@@ -41,7 +49,8 @@ def estimate_service_cost(equipment: str) -> dict:
         "onsite_hours": _range(rows["onsite_hours"]),
         "travel_hours": _range(rows["travel_hours"]),
         "costs_by_currency": {},
-        "reports": _records(rows[["report_id", "task_summary", "onsite_hours", "travel_hours",
+        "reports": _records(rows[["report_id", "country", "task_summary", "onsite_hours", "travel_hours",
+                                  "labour_rate", "travel_rate", "parts_cost", "line_item_sum",
                                   "total_cost", "currency", "cost_status", "weekend_or_overtime"]]),
         "notes": [],
     }
@@ -69,7 +78,35 @@ def estimate_service_cost(equipment: str) -> dict:
             result["notes"].append(f"{r['report_id']} was a weekend/overtime visit (higher rate).")
         if r["check_ok"] is False or r["check_ok"] == "False":
             result["notes"].append(f"{r['report_id']}: line items do not add up to the total.")
+    for _, r in rows[rows["total_cost"].isna() & rows["line_item_sum"].notna()].iterrows():
+        result["notes"].append(
+            f"{r['report_id']} states no total; line_item_sum ({r['line_item_sum']} {r['currency']}) "
+            "is labour + travel + parts computed from its stated hours, rates and parts.")
+    if country:
+        result["country_rates"] = _country_rates(df, country)
     return result
+
+
+def _country_rates(df: pd.DataFrame, country: str) -> dict:
+    """labour/travel rates from all reports in one country, any equipment"""
+    rows = df[df["country"].str.lower() == country.lower()]
+    if rows.empty:
+        return {"country": country, "reports_found": 0, "note": "No service reports from this country."}
+    rated = rows[rows["labour_rate"].notna() | rows["travel_rate"].notna()]
+    return {
+        "country": country,
+        "reports_found": len(rows),
+        "equipment_in_reports": sorted(rows["equipment"].unique()),
+        "currencies": sorted(rows["currency"].dropna().unique()),
+        "rates_by_currency": {
+            currency: {"reports": g["report_id"].tolist(),
+                       "labour_rate": _range(g["labour_rate"]),
+                       "travel_rate": _range(g["travel_rate"]),
+                       "travel_hours": _range(g["travel_hours"])}
+            for currency, g in rated.groupby("currency")
+        },
+        "note": "Rates from visits to other equipment in this country; use as context only.",
+    }
 
 
 def _records(df: pd.DataFrame) -> list[dict]:
@@ -149,10 +186,16 @@ TOOLS = [  # Responses API format
     {
         "type": "function",
         "name": "estimate_service_cost",
-        "description": "Cost and hours from historical field service reports for one equipment type.",
+        "description": (
+            "Cost, hours, rates and parts from historical field service reports for one equipment "
+            "type. Pass country to also get the labour/travel rates seen in that country."
+        ),
         "parameters": {
             "type": "object",
-            "properties": {"equipment": {"type": "string", "enum": EQUIPMENT_NAMES}},
+            "properties": {
+                "equipment": {"type": "string", "enum": EQUIPMENT_NAMES},
+                "country": {"type": "string", "description": "customer's country, e.g. Chile"},
+            },
             "required": ["equipment"],
         },
     },
